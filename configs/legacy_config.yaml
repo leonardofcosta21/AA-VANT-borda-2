@@ -1,0 +1,78 @@
+# ============================================================
+# Adaptive UAV-Edge Learning Architecture - Configuration
+# ============================================================
+
+# --- Model ---
+model:
+  name: "yolov8n.pt"           # YOLOv8 nano pretrained
+  input_size: 640
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+
+# --- MC Dropout Uncertainty ---
+uncertainty:
+  T: 8                         # Number of stochastic forward passes
+  dropout_rate: 0.1            # Dropout probability
+  alpha: 0.1                   # Fraction of samples forwarded (quantile threshold)
+
+# --- Active Learning ---
+active_learning:
+  budget_per_cycle: 50         # b_t: samples annotated per cycle (B=50)
+  num_cycles: 8                # K: total adaptation cycles
+  strategies:
+    - "random"
+    - "deterministic"
+    - "bald_only"
+    - "bald_diversity"         # proposed method
+
+# --- Diversity (k-means) ---
+diversity:
+  beta: 5                      # minimum cluster size factor
+  embedding_layer: -2          # penultimate layer for feature extraction
+
+# --- Incremental Fine-tuning ---
+training:
+  epochs_per_cycle: 5          # E: bounded epochs
+  batch_size: 16
+  initial_lr: 0.01
+  incremental_lr: 0.001        # LR for incremental updates (1/10 of initial)
+  n_min: 50                    # Condition A: minimum accumulated samples
+  tau_shift_percentile: 90     # Condition B: percentile for shift detection
+  shift_window: 3              # Window W for running uncertainty average
+
+# --- Dataset ---
+dataset:
+  name: "SARD"                 # Primary dataset for preliminary results
+  data_yaml: "data.yaml"       # Will be generated
+  test_ratio: 0.2
+  L0_sizes: [100, 200, 300, 400]  # Prior-knowledge regimes
+
+# --- Multi-Seed Experiment (H1/H3 statistical validation) ---
+multi_seed:
+  n_seeds: 5                   # ≥5 seeds required for robustness claim
+  base_seed: 42                # seed_k = base_seed + k
+  # Additional L0 sizes for sweet-spot experiment (Sem. 5):
+  l0_sizes_extended: [25, 50, 100, 200, 300, 400]
+  # Additional budget for sweet-spot:
+  budget_32: false             # set true to also run B=32
+
+# --- Distribution Shift Experiments (H2) ---
+shift:
+  # Source and target datasets
+  source_root: "./datasets/SARD"
+  target_root: null            # null = simulate shift on source
+  # Simulated shift parameters (used when target_root is null)
+  simulate_shift: true
+  shift_intensity: "moderate"  # none | mild | moderate | severe
+  domain_fraction: 0.5         # first 50% = source, last 50% = target
+  # Cross-dataset pairs (provide both source_root and target_root):
+  # pair_label: "VisDrone→FloodNet"
+  # n_seeds: 5 (same as multi_seed.n_seeds)
+  pair_label: "SARD→SARD_shifted"
+
+# --- Experiment ---
+experiment:
+  seed: 42
+  device: "auto"               # GPU device or "auto" / "cpu"
+  output_dir: "results"
+  num_runs: 1                  # Legacy single-run flag (use multi_seed instead)

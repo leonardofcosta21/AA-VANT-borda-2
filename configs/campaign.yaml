@@ -1,0 +1,312 @@
+# ============================================================================
+# Experimental campaign for the thesis
+#   "Continuous Model Adaptation in UAV-Edge Systems via
+#    Uncertainty-Guided Active Learning"
+#
+# Every block below exists because a specific item in the examination
+# board's revision plan (Planejamento de ajustes na tese, May 2026)
+# demands it. The `rationale` and `addresses` fields are not decoration:
+# `make report` reads them to build docs/EXPERIMENT_MATRIX.md, so the
+# mapping from a board objection to the experiment that answers it can
+# never silently drift from what the code actually runs.
+#
+# Run a block:      python run_campaign.py run --block E1_main_grid
+# Plan only:        python run_campaign.py plan --block E1_main_grid
+# Validate wiring:  python run_campaign.py run --block E1_main_grid --mock
+# ============================================================================
+
+campaign:
+  name: "uav-edge-al-thesis"
+  version: "2.0"
+  base_seed: 42
+  n_seeds: 5                 # Section 5.3.6.2 promises >= 5 independent seeds
+  output_root: "results"
+  device: "auto"
+  # Hard stop per single run. A YOLO run that hangs must not be able to
+  # consume the campaign's whole time budget silently.
+  run_timeout_min: 240
+
+defaults:
+  model: "yolov8n.pt"
+  img_size: 640
+  conf_threshold: 0.25
+  iou_threshold: 0.5
+  epochs_initial: 30
+  epochs_per_cycle: 5
+  batch_size: 16
+  initial_lr: 0.01
+  incremental_lr: 0.001
+  n_min: 50
+  tau_shift_percentile: 90
+  shift_window: 3
+  T: 8
+  dropout_rate: 0.1
+  alpha: 0.1
+  beta: 5
+  budget: 50
+  cycles: 8
+  test_fraction: 0.2
+  # Diagnostics that used to be missing entirely. Keeping them on by
+  # default means the accuracy numbers and the cost numbers come from the
+  # same runs and cannot disagree.
+  collect_diversity_metrics: true
+  collect_profiling: true
+  collect_per_domain_eval: false
+
+datasets:
+  # `audit` resolves these and reports what is present. Paths are
+  # relative to the repository root unless absolute.
+  sard:       "datasets/SARD"
+  visdrone:   "datasets/VisDrone"
+  uavdt:      "datasets/UAVDT"
+  aider:      "datasets/AIDER"
+  floodnet:   "datasets/FloodNet"
+  ladi:       "datasets/LADI"
+  unified:    "datasets/unified"
+
+# ============================================================================
+blocks:
+
+  # --------------------------------------------------------------------
+  - id: E1_main_grid
+    title: "Main acquisition grid with sweet-spot search (H1, H3)"
+    kind: al_grid
+    addresses:
+      - "Sec.5: incluir experimentos com L0 < 100 e batches menores (B=32 vs B=50)"
+      - "Sec.5: encontrar o sweet spot do tamanho do batch e de L0"
+      - "Sec.5: incluir mais execucoes experimentais e validacao estatistica robusta"
+      - "Sec.5: abordar explicitamente a promocao de diversidade na selecao"
+      - "H1, H3"
+    rationale: >
+      The preliminary results covered L0 in {100,200,300,400} at B=50 with a
+      single run. Figure 15 showed the curves stabilising from L0>=200, which
+      means the interesting regime is below 100 and was never sampled. This
+      block extends the grid downward to L0=25 and adds B=32, and repeats
+      every cell over n_seeds so differences can be tested rather than
+      eyeballed. Diversity diagnostics are recorded per cycle, which is what
+      turns H3 from an accuracy comparison into direct evidence about the
+      selection mechanism.
+    dataset: sard
+    also_on: [unified]        # repeated on the unified set for C5
+    strategies: [random, deterministic, bald_only, bald_diversity]
+    l0_sizes: [25, 50, 100, 200, 300, 400]
+    budgets: [32, 50]
+    cycles: 8
+    n_seeds: 5
+    priority: 1
+
+  # --------------------------------------------------------------------
+  - id: E2a_shift_baseline
+    title: "No-adaptation baseline under covariate shift (H2 reference)"
+    kind: shift_baseline
+    addresses:
+      - "Cronograma Sem.3: rodar baseline de shift, registrar queda de recall e mAP@50"
+      - "H2"
+    rationale: >
+      Every claim about adaptation under shift needs the counterfactual: how
+      far the source-trained model falls on the target domain when nothing is
+      done. Without this row the adaptation curves have no zero point, and the
+      thesis cannot quantify how much of the final recall is recovery versus
+      baseline competence.
+    pairs:
+      - {source: visdrone, target: floodnet}
+      - {source: visdrone, target: sard}
+      - {source: visdrone, target: aider}
+      - {source: sard,     target: uavdt}
+    l0_sizes: [100]
+    n_seeds: 5
+    priority: 1
+
+  # --------------------------------------------------------------------
+  - id: E2b_shift_real
+    title: "Cross-dataset covariate shift, all strategies (H2, C1)"
+    kind: shift_grid
+    addresses:
+      - "Sec.5: incluir experimentos com distribution shift / data shift"
+      - "H2 (robustez sob distribution shift) - ainda nao verificada experimentalmente"
+      - "C1 (arquitetura adaptativa sob distribution shifts)"
+      - "Cronograma Sem.3-4: Bayesiana vs deterministica sob shift"
+    rationale: >
+      H2 and C1 are stated in the thesis but were never tested: the shift code
+      existed and produced per-strategy files, yet the combined table was
+      empty. Real source->target pairs are used rather than only synthetic
+      augmentation, because the board's concern is a genuine change of domain
+      (different sensors, altitudes and scenes), which brightness and fog
+      jitter does not reproduce. Bayesian and deterministic estimators are run
+      on identical splits so the stability comparison is paired.
+    pairs:
+      - {source: visdrone, target: floodnet}
+      - {source: visdrone, target: sard}
+      - {source: visdrone, target: aider}
+      - {source: sard,     target: uavdt}
+    strategies: [random, deterministic, bald_only, bald_diversity]
+    l0_sizes: [100]
+    n_seeds: 5
+    collect_per_domain_eval: true
+    priority: 1
+
+  # --------------------------------------------------------------------
+  - id: E2c_shift_intensity
+    title: "Graded synthetic shift intensity (H2 dose-response)"
+    kind: shift_grid
+    addresses:
+      - "Sec.5.3.6.3 da tese: intensificacao controlada do shift"
+      - "Sec.9: robustez do limiar tau_shift sob intensificacao do shift"
+    rationale: >
+      Cross-dataset pairs show whether the method survives a shift; they
+      cannot show how it degrades as the shift grows, because the intensity is
+      not a controllable variable. The synthetic ladder supplies that axis and
+      is the only way to demonstrate that the shift-detection threshold
+      triggers at the right point instead of firing arbitrarily.
+    source: sard
+    simulate: true
+    intensities: [none, mild, moderate, severe]
+    strategies: [deterministic, bald_diversity]
+    l0_sizes: [100]
+    n_seeds: 5
+    priority: 2
+
+  # --------------------------------------------------------------------
+  - id: E3_uncertainty_methods
+    title: "Uncertainty estimator comparison and cost (C2, board Sec.9.1-9.2)"
+    kind: uncertainty_comparison
+    addresses:
+      - "Sec.9.1: MC Dropout e Bayesiano *aproximado*; justificar pelo custo"
+      - "Sec.9.1: verificar se o custo do MC Dropout e praticavel na borda"
+      - "Sec.9.1: reavaliar Deep Ensembles (5 modelos), custo vs ganho"
+      - "Sec.9.1: considerar predicao conformal como alternativa caixa-preta"
+      - "Sec.9.1: explorar SWAG"
+      - "Sec.9.2: experimentar BSB/PSB; abordagem de portfolio de criterios"
+    rationale: >
+      The board questioned both the label ("Bayesiano" should be "Bayesiano
+      aproximado") and the choice itself. Answering the second requires the
+      alternatives measured on the same pipeline and the same splits, with
+      their costs attached: every method here reports accuracy alongside
+      acquisition-time overhead, resident memory and storage, so the thesis
+      can defend MC Dropout on the cost-benefit argument rather than
+      asserting it.
+    dataset: sard
+    methods:
+      - mc_dropout         # the thesis baseline
+      - deterministic      # single-pass reference
+      - deep_ensemble      # 5 members, the board's explicit alternative
+      - conformal          # black-box, distribution-free
+      - swag               # Gaussian over SGD iterates
+      - bsb                # best-and-second-best margin (Ribeiro et al. 2026)
+      - psb                # past-second-best
+      - bsb_diversity      # portfolio: margin criterion + k-means diversity
+    l0_sizes: [100]
+    n_seeds: 5
+    ensemble_members: 5
+    priority: 2
+
+  # --------------------------------------------------------------------
+  - id: E4_sensitivity
+    title: "Hyperparameter sensitivity analysis (thesis Sec.5.3.6.1)"
+    kind: sensitivity
+    addresses:
+      - "Tese Sec.5.3.6.1: analise fatorial de T, b_t, K_clusters e tau_shift"
+      - "Sec.5: adicionar maior formalizacao do mecanismo adaptativo"
+    rationale: >
+      The thesis promises this analysis and reports fixed values chosen by
+      argument rather than evidence. One-factor-at-a-time around the baseline
+      keeps the cost linear instead of combinatorial, which is the only way
+      this fits the schedule; the interaction terms are explicitly out of
+      scope and declared as such.
+    dataset: sard
+    strategy: bald_diversity
+    l0_sizes: [100]
+    n_seeds: 3          # sensitivity ranks configurations; 3 seeds suffice
+    sweeps:
+      T: [4, 8, 16, 32]
+      budget: [25, 50, 100]
+      cluster_divisor: [2, 4, 5, "auto"]   # K = b/divisor; "auto" = elbow
+      tau_shift_percentile: [80, 90, 95]
+    priority: 3
+
+  # --------------------------------------------------------------------
+  - id: E5_long_horizon
+    title: "Long-horizon adaptation and catastrophic forgetting"
+    kind: al_grid
+    addresses:
+      - "Sec.5: tratar esquecimento catastrofico e adaptacao a novos conceitos"
+      - "Sec.3: 'aprendizado continuo' - aprofundar adequadamente ou reduzir destaque"
+      - "Tese Sec.5.3.6.3: estender K alem de 8"
+    rationale: >
+      The thesis invokes Continual Learning, and the board's position was that
+      it must either be treated properly or de-emphasised. This block takes the
+      first option: K is extended to 20 cycles and the model is evaluated on
+      every source domain after every cycle, which yields the backward-transfer
+      and retention numbers the claim requires. It also answers the separate
+      question of whether the BALD+Diversity advantage survives as the model
+      matures, or erodes once the easy gains are exhausted.
+    dataset: unified
+    strategies: [random, bald_diversity]
+    l0_sizes: [100]
+    budgets: [50]
+    cycles: 20
+    n_seeds: 3
+    collect_per_domain_eval: true
+    per_domain_eval_every: 2
+    priority: 2
+
+  # --------------------------------------------------------------------
+  - id: E6_operational_profiling
+    title: "Extended operational profiling (H4, C3, C4)"
+    kind: profiling
+    addresses:
+      - "H4: medir apenas latencia e insuficiente - ampliar para memoria, trafego de rede, processamento e energia"
+      - "C3 (edge-native): detalhar e demonstrar o que torna o pipeline edge-native"
+      - "C4: ampliar a validacao alem da medicao de latencia"
+      - "Sec.5: incluir ou planejar concretamente o profiling em hardware embarcado real"
+    rationale: >
+      H4 rested on a single mean latency measured on a workstation, which the
+      board correctly called insufficient. This block measures the four
+      resources it named, separates deployment cost (one deterministic pass,
+      on the real-time path) from acquisition cost (T stochastic passes, off
+      it), and reports the latency distribution rather than the mean, because
+      the real-time claim is decided by the tail. The same script runs on a
+      Jetson without modification and reads tegrastats rail power there; until
+      that run happens the results declare the platform they were measured on,
+      so no workstation number can be mistaken for an embedded one.
+    dataset: sard
+    strategies: [bald_diversity, deterministic]
+    l0_sizes: [100]
+    measure:
+      - inference_latency_distribution   # p50/p90/p95/p99, frames over budget
+      - mc_dropout_acquisition_overhead  # cost of T passes per candidate
+      - peak_host_memory
+      - peak_gpu_memory
+      - cpu_utilisation
+      - gpu_utilisation
+      - gpu_power_and_energy
+      - finetuning_wall_clock
+      - network_payload_per_cycle        # uplink frames, labels, weights
+      - thermal
+    link_mbps: 10.0        # assumed UAV-to-edge link for transfer-time math
+    realtime_budget_ms: 33.0
+    n_seeds: 3
+    priority: 1
+
+# ============================================================================
+# Derived, non-simulation stages. These consume the blocks above.
+# ============================================================================
+reporting:
+  statistics:
+    n_bootstrap: 1000
+    alpha: 0.05
+    correction: holm
+    reference_strategy: bald_diversity
+    primary_metrics: [auc_normalized, final_recall, final_mAP50, recall_variance]
+  figures:
+    # The board flagged Figures 2, 11, 14 and 17 as illegible.
+    base_font_size: 13
+    label_font_size: 14
+    title_font_size: 15
+    dpi: 300
+    formats: [pdf, png]
+  tables:
+    float_format: "%.4f"
+    # Report both, always: the raw integral for continuity with the
+    # preliminary results, the normalised value for interpretability.
+    report_auc_raw_and_normalized: true

@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the thesis below."
+title: "Continuous Model Adaptation in UAV-Edge Systems via Uncertainty-Guided Active Learning"
+authors:
+  - family-names: "Ferreira da Costa"
+    given-names: "Leonardo"
+    orcid: "https://orcid.org/0000-0002-8980-8932"
+    affiliation: "Universidade Estadual do Ceara (UECE) / Universidade Federal do Ceara (UFC)"
+license: MIT
+type: software
+year: 2026
